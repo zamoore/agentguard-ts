@@ -1,4 +1,4 @@
-# @your-scope/package-name
+# @zamoore/agentguard-node
 
 A modern Node.js package built with TypeScript, ESM, and bleeding-edge tooling.
 
