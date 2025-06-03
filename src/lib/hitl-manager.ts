@@ -1,0 +1,273 @@
+import { randomUUID } from 'crypto';
+import type {
+  ToolCall,
+  ApprovalRequest,
+  ApprovalResponse,
+  WebhookConfig,
+  HITLWorkflowResult,
+} from '../types.js';
+
+import { ApprovalTimeoutError, AgentGuardError } from './errors.js';
+import type { Logger } from './logger.js';
+
+export class HITLManager {
+  private readonly pendingApprovals = new Map<
+    string,
+    {
+      request: ApprovalRequest;
+      resolve: (result: HITLWorkflowResult) => void;
+      reject: (error: Error) => void;
+      timeoutId: NodeJS.Timeout;
+    }
+  >();
+
+  constructor(
+    private readonly webhookConfig: WebhookConfig | null,
+    private readonly logger: Logger,
+  ) {}
+
+  /**
+   * Create an approval request and send it via webhook
+   */
+  async createApprovalRequest(toolCall: ToolCall): Promise<string> {
+    const requestId = randomUUID();
+    const request: ApprovalRequest = {
+      id: requestId,
+      toolCall,
+      timestamp: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(), // 30 minutes
+    };
+
+    this.logger.info(`Created approval request: ${requestId}`, { request });
+
+    // Send webhook if configured
+    if (this.webhookConfig) {
+      try {
+        await this.sendWebhook(request);
+        this.logger.info(`Webhook sent for approval request: ${requestId}`);
+      } catch (error) {
+        this.logger.error(`Failed to send webhook for approval request: ${requestId}`, error);
+        throw new AgentGuardError(
+          `Failed to send approval request webhook: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          'WEBHOOK_FAILED',
+        );
+      }
+    } else {
+      this.logger.warn(`No webhook configured, approval request ${requestId} created but not sent`);
+    }
+
+    return requestId;
+  }
+
+  /**
+   * Wait for approval response with timeout
+   */
+  async waitForApproval(requestId: string, timeout: number): Promise<HITLWorkflowResult> {
+    const startTime = Date.now();
+
+    return new Promise<HITLWorkflowResult>((resolve, reject) => {
+      // Set up timeout
+      const timeoutId = setTimeout(() => {
+        this.pendingApprovals.delete(requestId);
+        reject(
+          new ApprovalTimeoutError(`Approval request timed out after ${timeout}ms`, requestId),
+        );
+      }, timeout);
+
+      // Store the pending approval
+      this.pendingApprovals.set(requestId, {
+        request: {
+          id: requestId,
+          toolCall: {} as ToolCall, // Will be populated by createApprovalRequest
+          timestamp: new Date().toISOString(),
+        },
+        resolve: (result: HITLWorkflowResult) => {
+          clearTimeout(timeoutId);
+          resolve(result);
+        },
+        reject: (error: Error) => {
+          clearTimeout(timeoutId);
+          reject(error);
+        },
+        timeoutId,
+      });
+
+      this.logger.debug(`Waiting for approval: ${requestId} (timeout: ${timeout}ms)`);
+    });
+  }
+
+  /**
+   * Handle approval response from external system
+   */
+  async handleApprovalResponse(response: ApprovalResponse): Promise<void> {
+    const pending = this.pendingApprovals.get(response.requestId);
+
+    if (!pending) {
+      this.logger.warn(`Received approval response for unknown request: ${response.requestId}`, {
+        response,
+      });
+      throw new AgentGuardError(
+        `Unknown approval request ID: ${response.requestId}`,
+        'UNKNOWN_REQUEST_ID',
+      );
+    }
+
+    this.logger.info(`Received approval response: ${response.requestId}`, { response });
+    const responseTime = Date.now() - new Date(pending.request.timestamp).getTime();
+    const result: HITLWorkflowResult = {
+      approved: response.decision === 'APPROVE',
+      reason: response.reason,
+      approvedBy: response.approvedBy,
+      responseTime,
+    };
+
+    // Remove from pending and resolve
+    this.pendingApprovals.delete(response.requestId);
+    clearTimeout(pending.timeoutId);
+    pending.resolve(result);
+  }
+
+  /**
+   * Send webhook notification for approval request
+   */
+  private async sendWebhook(request: ApprovalRequest): Promise<void> {
+    if (!this.webhookConfig) {
+      throw new AgentGuardError('No webhook configuration available', 'NO_WEBHOOK_CONFIG');
+    }
+
+    const payload = {
+      type: 'approval_request',
+      request,
+      timestamp: new Date().toISOString(),
+    };
+
+    for (let attempt = 1; attempt <= (this.webhookConfig.retries || 3); attempt++) {
+      try {
+        const response = await fetch(this.webhookConfig.url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'AgentGuard/1.0',
+            ...this.webhookConfig.headers,
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(this.webhookConfig.timeout || 10000),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        this.logger.debug(`Webhook sent successfully on attempt ${attempt}`, {
+          requestId: request.id,
+          status: response.status,
+        });
+        return;
+      } catch (error) {
+        this.logger.warn(`Webhook attempt ${attempt} failed`, {
+          requestId: request.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+
+        if (attempt === (this.webhookConfig.retries || 3)) {
+          throw error;
+        }
+
+        // Wait before retrying (exponential backoff)
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 1) * 1000));
+      }
+    }
+  }
+
+  /**
+   * Get pending approval requests
+   */
+  getPendingApprovals(): ApprovalRequest[] {
+    return Array.from(this.pendingApprovals.values()).map(p => p.request);
+  }
+
+  /**
+   * Cancel a pending approval request
+   */
+  cancelApproval(requestId: string, reason: string = 'Cancelled'): boolean {
+    const pending = this.pendingApprovals.get(requestId);
+
+    if (!pending) {
+      return false;
+    }
+
+    this.logger.info(`Cancelling approval request: ${requestId}`, { reason });
+
+    this.pendingApprovals.delete(requestId);
+    clearTimeout(pending.timeoutId);
+    pending.reject(
+      new AgentGuardError(`Approval request cancelled: ${reason}`, 'APPROVAL_CANCELLED'),
+    );
+
+    return true;
+  }
+
+  /**
+   * Clean up expired approval requests
+   */
+  cleanupExpiredRequests(): number {
+    const now = Date.now();
+    let cleanedCount = 0;
+
+    for (const [requestId, pending] of this.pendingApprovals.entries()) {
+      const requestTime = new Date(pending.request.timestamp).getTime();
+      const expiresAt = pending.request.expiresAt
+        ? new Date(pending.request.expiresAt).getTime()
+        : null;
+
+      // Clean up if expired or very old (1 hour default)
+      const maxAge = expiresAt || requestTime + 60 * 60 * 1000;
+
+      if (now > maxAge) {
+        this.logger.debug(`Cleaning up expired approval request: ${requestId}`);
+        clearTimeout(pending.timeoutId);
+        pending.reject(
+          new ApprovalTimeoutError('Approval request expired during cleanup', requestId),
+        );
+        this.pendingApprovals.delete(requestId);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      this.logger.info(`Cleaned up ${cleanedCount} expired approval requests`);
+    }
+
+    return cleanedCount;
+  }
+
+  /**
+   * Get statistics about pending approvals
+   */
+  getStats(): {
+    pendingCount: number;
+    oldestRequestAge: number | null;
+    averageWaitTime: number | null;
+  } {
+    const pending = Array.from(this.pendingApprovals.values());
+    const now = Date.now();
+
+    if (pending.length === 0) {
+      return {
+        pendingCount: 0,
+        oldestRequestAge: null,
+        averageWaitTime: null,
+      };
+    }
+
+    const ages = pending.map(p => now - new Date(p.request.timestamp).getTime());
+    const oldestAge = Math.max(...ages);
+    const averageAge = ages.reduce((sum, age) => sum + age, 0) / ages.length;
+
+    return {
+      pendingCount: pending.length,
+      oldestRequestAge: oldestAge,
+      averageWaitTime: averageAge,
+    };
+  }
+}

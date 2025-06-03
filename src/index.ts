@@ -1,15 +1,60 @@
 /**
- * Main entry point for the package
+ * AgentGuard - Security toolkit for AI agents
+ *
+ * Provides declarative policy-based security controls for AI agent tool calls
+ * with support for blocking, allowing, and human-in-the-loop approval workflows.
  */
 
-// Export all types
-export type { PackageOptions } from './types.js';
+import { AgentGuard } from './lib/agentguard.js';
 
-// Export core package functionality
-export { createPackage } from './lib/package.js';
+import type { AgentGuardConfig } from './types.js';
 
-// Export all version-related functionality
+// Core exports
+export { AgentGuard } from './lib/agentguard.js';
+export { PolicyLoader } from './lib/policy-loader.js';
+export { HITLManager } from './lib/hitl-manager.js';
+export { Logger } from './lib/logger.js';
+
+// Type exports
+export type {
+  // Core types
+  PolicyDecision,
+  ToolCall,
+  GuardResult,
+  AgentGuardConfig,
+  WrappedTool,
+
+  // Policy types
+  Policy,
+  PolicyRule,
+  PolicyCondition,
+  PolicyEvaluationContext,
+
+  // HITL types
+  ApprovalRequest,
+  ApprovalResponse,
+  HITLWorkflowResult,
+  WebhookConfig,
+
+  // Utility types
+  LogLevel,
+} from './types.js';
+
+// Error exports
+export {
+  AgentGuardError,
+  PolicyViolationError,
+  ApprovalTimeoutError,
+  PolicyLoadError,
+} from './lib/errors.js';
+
+// Version exports
 export * from './version.js';
 
-// Default export for convenience
-export { createPackage as default } from './lib/package.js';
+// Convenience factory function
+export function createAgentGuard(config: AgentGuardConfig): AgentGuard {
+  return new AgentGuard(config);
+}
+
+// Default export
+export default AgentGuard;
