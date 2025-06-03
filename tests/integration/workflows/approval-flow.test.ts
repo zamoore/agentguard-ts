@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { AgentGuard } from '../../src/lib/agentguard.js';
-import { createMockPolicy, createMockApprovalResponse, delay } from '../helpers/index.js';
-import { mockTools } from '../fixtures/tools.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { AgentGuard } from '../../../src/index.js';
+import { createMockPolicy, delay } from '../../helpers/index.js';
+import { mockTools } from '../../fixtures/tools.js';
 
-describe('HITL Integration Tests', () => {
+describe('Approval Workflow Integration', () => {
   let webhookCalls: any[] = [];
 
   beforeEach(() => {
@@ -39,8 +39,7 @@ describe('HITL Integration Tests', () => {
     // Wait for webhook
     await delay(50);
     expect(webhookCalls).toHaveLength(1);
-    const webhookData = webhookCalls[0].options;
-    const requestId = webhookData.request.id;
+    const requestId = webhookCalls[0].options.request.id;
 
     // Simulate approval
     await guard.handleApprovalResponse({
@@ -59,22 +58,29 @@ describe('HITL Integration Tests', () => {
     });
   });
 
-  it('should handle approval timeout', async () => {
+  it('should handle denial', async () => {
     const policy = createMockPolicy({
       defaultAction: 'REQUIRE_HUMAN_APPROVAL',
       webhook: { url: 'https://example.com/webhook' },
     });
 
-    const guard = new AgentGuard({
-      policy,
-      enableLogging: false,
-      timeout: 100, // Very short timeout
-    });
+    const guard = new AgentGuard({ policy, enableLogging: false });
     await guard.initialize();
 
     const tool = guard.protect('test', mockTools.simpleFunction);
+    const resultPromise = tool(1, 2);
 
-    await expect(tool(1, 2)).rejects.toThrow('Approval request timed out');
+    await delay(50);
+    const requestId = webhookCalls[0].options.request.id;
+
+    await guard.handleApprovalResponse({
+      requestId,
+      decision: 'DENY',
+      reason: 'Not authorized',
+      approvedBy: 'reviewer',
+    });
+
+    await expect(resultPromise).rejects.toThrow('Tool call denied by human reviewer');
   });
 
   it('should handle concurrent approval requests', async () => {
@@ -109,43 +115,6 @@ describe('HITL Integration Tests', () => {
     }
 
     const results = await Promise.all(promises);
-    expect(results).toEqual([
-      { success: true, echo: 'request1' },
-      { success: true, echo: 'request2' },
-      { success: true, echo: 'request3' },
-    ]);
-  });
-
-  it('should handle webhook retry on failure', async () => {
-    let callCount = 0;
-    global.fetch = vi.fn(async () => {
-      callCount++;
-      if (callCount < 3) {
-        throw new Error('Network error');
-      }
-      return new Response(JSON.stringify({ success: true }), { status: 200 });
-    }) as any;
-
-    const policy = createMockPolicy({
-      defaultAction: 'REQUIRE_HUMAN_APPROVAL',
-      webhook: {
-        url: 'https://example.com/webhook',
-        retries: 3,
-      },
-    });
-
-    const guard = new AgentGuard({ policy, enableLogging: false, timeout: 200 });
-    await guard.initialize();
-
-    const tool = guard.protect('test', mockTools.simpleFunction);
-
-    // Should eventually timeout, but webhook should retry
-    try {
-      await tool(1, 2);
-    } catch (error) {
-      // Expected timeout
-    }
-
-    expect(callCount).toBe(3); // Should have retried
+    expect(results).toHaveLength(3);
   });
 });

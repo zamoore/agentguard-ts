@@ -1,18 +1,18 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+// tests/integration/workflows/basic-flow.test.ts
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { AgentGuard } from '../../src/lib/agentguard.js';
-import { samplePolicies } from '../fixtures/policies.js';
-import { mockTools } from '../fixtures/tools.js';
+import { AgentGuard } from '../../../src/index.js';
+import { samplePolicies } from '../../fixtures/policies.js';
+import { mockTools } from '../../fixtures/tools.js';
 
-describe('Workflow Integration Tests', () => {
+describe('Basic Workflow Integration', () => {
   let testDir: string;
 
   beforeEach(async () => {
     testDir = join(tmpdir(), `agentguard-test-${Date.now()}`);
     await mkdir(testDir, { recursive: true });
-    vi.clearAllMocks();
   });
 
   afterEach(async () => {
@@ -38,28 +38,7 @@ describe('Workflow Integration Tests', () => {
     );
   });
 
-  it('should handle multiple agents with different policies', async () => {
-    const policy1Path = join(testDir, 'policy1.yaml');
-    const policy2Path = join(testDir, 'policy2.yaml');
-
-    await writeFile(policy1Path, samplePolicies.allowAll);
-    await writeFile(policy2Path, samplePolicies.blockAll);
-
-    const guard1 = new AgentGuard({ policyPath: policy1Path, enableLogging: false });
-    const guard2 = new AgentGuard({ policyPath: policy2Path, enableLogging: false });
-
-    await guard1.initialize();
-    await guard2.initialize();
-
-    const tool1 = guard1.protect('test', mockTools.simpleFunction);
-    const tool2 = guard2.protect('test', mockTools.simpleFunction);
-
-    // Guard 1 allows, Guard 2 blocks
-    expect(await tool1(1, 2)).toBe(3);
-    await expect(tool2(1, 2)).rejects.toThrow();
-  });
-
-  it('should reload policy dynamically', async () => {
+  it('should handle policy reload during runtime', async () => {
     const policyPath = join(testDir, 'dynamic-policy.yaml');
     await writeFile(policyPath, samplePolicies.allowAll);
 

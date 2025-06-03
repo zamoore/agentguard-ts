@@ -38,6 +38,14 @@ export class HITLManager {
       expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(), // 30 minutes
     };
 
+    // Store the request in pending approvals (handlers will be set by waitForApproval)
+    this.pendingApprovals.set(requestId, {
+      request,
+      resolve: () => {}, // Placeholder, will be updated by waitForApproval
+      reject: () => {}, // Placeholder, will be updated by waitForApproval
+      timeoutId: null as any, // Will be set by waitForApproval
+    });
+
     this.logger.info(`Created approval request: ${requestId}`, { request });
 
     // Send webhook if configured
@@ -53,7 +61,10 @@ export class HITLManager {
         );
       }
     } else {
-      this.logger.warn(`No webhook configured, approval request ${requestId} created but not sent`);
+      this.logger.warn(
+        `No webhook configured, approval request ${requestId} created but not sent`,
+        { request },
+      );
     }
 
     return requestId;
@@ -74,23 +85,38 @@ export class HITLManager {
         );
       }, timeout);
 
-      // Store the pending approval
-      this.pendingApprovals.set(requestId, {
-        request: {
-          id: requestId,
-          toolCall: {} as ToolCall, // Will be populated by createApprovalRequest
-          timestamp: new Date().toISOString(),
-        },
-        resolve: (result: HITLWorkflowResult) => {
+      // Check if we already have this request (from createApprovalRequest)
+      const existingEntry = this.pendingApprovals.get(requestId);
+      if (existingEntry) {
+        // Update the existing entry with the promise handlers and timeout
+        existingEntry.resolve = (result: HITLWorkflowResult) => {
           clearTimeout(timeoutId);
           resolve(result);
-        },
-        reject: (error: Error) => {
+        };
+        existingEntry.reject = (error: Error) => {
           clearTimeout(timeoutId);
           reject(error);
-        },
-        timeoutId,
-      });
+        };
+        existingEntry.timeoutId = timeoutId;
+      } else {
+        // Store the pending approval (fallback if createApprovalRequest wasn't called)
+        this.pendingApprovals.set(requestId, {
+          request: {
+            id: requestId,
+            toolCall: {} as ToolCall, // Will be populated by createApprovalRequest
+            timestamp: new Date().toISOString(),
+          },
+          resolve: (result: HITLWorkflowResult) => {
+            clearTimeout(timeoutId);
+            resolve(result);
+          },
+          reject: (error: Error) => {
+            clearTimeout(timeoutId);
+            reject(error);
+          },
+          timeoutId,
+        });
+      }
 
       this.logger.debug(`Waiting for approval: ${requestId} (timeout: ${timeout}ms)`);
     });

@@ -1,4 +1,4 @@
-import { delay } from '../helpers';
+import { delay } from '../helpers/index.js';
 
 export const mockTools = {
   simpleFunction: (x: number, y: number) => x + y,

@@ -29,7 +29,7 @@
     "test:coverage": "vitest --coverage",
     "test:unit": "vitest tests/unit",
     "test:integration": "vitest tests/integration",
-    "test:benchmarks": "vitest tests/benchmarks --run",
+    "test:performance": "vitest tests/performance --run",
     "test:cli": "vitest tests/cli.test.ts",
     "test:watch": "vitest --watch",
     "test:ci": "vitest --run --coverage",

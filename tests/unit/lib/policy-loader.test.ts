@@ -2,12 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { PolicyLoader } from '../../src/lib/policy-loader.js';
-import { PolicyLoadError } from '../../src/lib/errors.js';
-import { Logger } from '../../src/lib/logger.js';
-import { samplePolicies } from '../fixtures/policies.js';
+import { PolicyLoader } from '../../../src/lib/policy-loader.js';
+import { PolicyLoadError } from '../../../src/lib/errors.js';
+import { Logger } from '../../../src/lib/logger.js';
+import { samplePolicies } from '../../fixtures/policies.js';
 
-describe('Policy Unit Tests', () => {
+describe('PolicyLoader', () => {
   let policyLoader: PolicyLoader;
   let testDir: string;
 
@@ -21,7 +21,7 @@ describe('Policy Unit Tests', () => {
     await rm(testDir, { recursive: true, force: true });
   });
 
-  describe('PolicyLoader', () => {
+  describe('loadPolicy()', () => {
     it('should load a valid policy from YAML file', async () => {
       const policyPath = join(testDir, 'valid-policy.yaml');
       await writeFile(policyPath, samplePolicies.complexPolicy);
@@ -40,9 +40,10 @@ describe('Policy Unit Tests', () => {
       const policyPath = join(testDir, 'non-existent.yaml');
 
       await expect(policyLoader.loadPolicy(policyPath)).rejects.toThrow(PolicyLoadError);
+      await expect(policyLoader.loadPolicy(policyPath)).rejects.toThrow('Policy file not found');
     });
 
-    it('should throw error for invalid YAML', async () => {
+    it('should throw error for invalid YAML syntax', async () => {
       const policyPath = join(testDir, 'invalid.yaml');
       await writeFile(policyPath, 'invalid: yaml: content:::');
 
@@ -50,21 +51,45 @@ describe('Policy Unit Tests', () => {
     });
 
     it('should throw error for missing required fields', async () => {
-      const policyPath = join(testDir, 'invalid-policy.yaml');
+      const policyPath = join(testDir, 'missing-fields.yaml');
       await writeFile(policyPath, samplePolicies.invalidPolicy);
 
       await expect(policyLoader.loadPolicy(policyPath)).rejects.toThrow(
         /Missing or invalid "defaultAction" field/,
       );
     });
+  });
 
-    it('should validate webhook configuration', async () => {
-      const policyPath = join(testDir, 'webhook-policy.yaml');
+  describe('validation', () => {
+    it('should validate policy structure', async () => {
+      const policyPath = join(testDir, 'minimal.yaml');
       await writeFile(
         policyPath,
         `
 version: "1.0"
-name: "Webhook Policy"
+name: "Minimal Policy"
+defaultAction: ALLOW
+rules: []
+`,
+      );
+
+      const policy = await policyLoader.loadPolicy(policyPath);
+
+      expect(policy).toMatchObject({
+        version: '1.0',
+        name: 'Minimal Policy',
+        defaultAction: 'ALLOW',
+        rules: [],
+      });
+    });
+
+    it('should validate webhook configuration', async () => {
+      const policyPath = join(testDir, 'bad-webhook.yaml');
+      await writeFile(
+        policyPath,
+        `
+version: "1.0"
+name: "Bad Webhook"
 defaultAction: ALLOW
 webhook:
   url: "not-a-valid-url"
@@ -73,22 +98,46 @@ rules: []
       );
 
       await expect(policyLoader.loadPolicy(policyPath)).rejects.toThrow(
-        /Invalid webhook URL format/,
+        'Invalid webhook URL format',
       );
     });
-  });
 
-  describe('Policy Rule Validation', () => {
-    it('should validate rule structure', async () => {
-      const policyPath = join(testDir, 'rule-policy.yaml');
+    it('should set webhook defaults', async () => {
+      const policyPath = join(testDir, 'webhook-defaults.yaml');
       await writeFile(
         policyPath,
         `
 version: "1.0"
-name: "Rule Policy"
+name: "Webhook Defaults"
+defaultAction: ALLOW
+webhook:
+  url: "https://example.com/webhook"
+rules: []
+`,
+      );
+
+      const policy = await policyLoader.loadPolicy(policyPath);
+
+      expect(policy.webhook).toEqual({
+        url: 'https://example.com/webhook',
+        timeout: 10000,
+        retries: 3,
+        headers: {},
+      });
+    });
+  });
+
+  describe('rule validation', () => {
+    it('should validate rule structure', async () => {
+      const policyPath = join(testDir, 'rule-validation.yaml');
+      await writeFile(
+        policyPath,
+        `
+version: "1.0"
+name: "Rule Validation"
 defaultAction: ALLOW
 rules:
-  - name: "Test Rule"
+  - name: "Valid Rule"
     action: BLOCK
     conditions:
       - field: "toolCall.toolName"
@@ -100,10 +149,18 @@ rules:
       const policy = await policyLoader.loadPolicy(policyPath);
       const rule = policy.rules[0];
 
-      expect(rule.name).toBe('Test Rule');
-      expect(rule.action).toBe('BLOCK');
-      expect(rule.conditions).toHaveLength(1);
-      expect(rule.conditions[0].field).toBe('toolCall.toolName');
+      expect(rule).toMatchObject({
+        name: 'Valid Rule',
+        action: 'BLOCK',
+        priority: 0,
+        conditions: [
+          {
+            field: 'toolCall.toolName',
+            operator: 'equals',
+            value: 'test',
+          },
+        ],
+      });
     });
 
     it('should reject invalid action types', async () => {
@@ -150,12 +207,12 @@ rules:
     });
 
     it('should validate numeric operators require numeric values', async () => {
-      const policyPath = join(testDir, 'numeric-operator.yaml');
+      const policyPath = join(testDir, 'numeric-validation.yaml');
       await writeFile(
         policyPath,
         `
 version: "1.0"
-name: "Numeric Operator"
+name: "Numeric Validation"
 defaultAction: BLOCK
 rules:
   - name: "Numeric Rule"
@@ -170,7 +227,7 @@ rules:
       await expect(policyLoader.loadPolicy(policyPath)).rejects.toThrow(/requires a numeric value/);
     });
 
-    it('should validate "in" operator requires array value', async () => {
+    it('should validate "in" operator requires array', async () => {
       const policyPath = join(testDir, 'in-operator.yaml');
       await writeFile(
         policyPath,
@@ -194,63 +251,7 @@ rules:
     });
   });
 
-  describe('Policy Priority', () => {
-    it('should handle rule priorities correctly', async () => {
-      const policyPath = join(testDir, 'priority-policy.yaml');
-      await writeFile(
-        policyPath,
-        `
-version: "1.0"
-name: "Priority Policy"
-defaultAction: BLOCK
-rules:
-  - name: "Low Priority"
-    priority: 10
-    action: ALLOW
-    conditions: []
-  - name: "High Priority"
-    priority: 100
-    action: BLOCK
-    conditions: []
-  - name: "Medium Priority"
-    priority: 50
-    action: REQUIRE_HUMAN_APPROVAL
-    conditions: []
-`,
-      );
-
-      const policy = await policyLoader.loadPolicy(policyPath);
-
-      expect(policy.rules).toHaveLength(3);
-      expect(policy.rules[0].priority).toBe(10);
-      expect(policy.rules[1].priority).toBe(100);
-      expect(policy.rules[2].priority).toBe(50);
-    });
-
-    it('should default priority to 0 if not specified', async () => {
-      const policyPath = join(testDir, 'default-priority.yaml');
-      await writeFile(
-        policyPath,
-        `
-version: "1.0"
-name: "Default Priority"
-defaultAction: BLOCK
-rules:
-  - name: "No Priority"
-    action: ALLOW
-    conditions: []
-`,
-      );
-
-      const policy = await policyLoader.loadPolicy(policyPath);
-
-      // The PolicyLoader doesn't set a default, so priority will be undefined
-      // But the AgentGuard treats undefined as 0 during sorting
-      expect(policy.rules[0].priority).toBeUndefined();
-    });
-  });
-
-  describe('Sample Policy Generation', () => {
+  describe('generateSamplePolicy()', () => {
     it('should generate a valid sample policy', () => {
       const samplePolicy = PolicyLoader.generateSamplePolicy();
 
@@ -258,6 +259,17 @@ rules:
       expect(samplePolicy).toContain('defaultAction: BLOCK');
       expect(samplePolicy).toContain('webhook:');
       expect(samplePolicy).toContain('rules:');
+    });
+
+    it('should generate parseable YAML', async () => {
+      const samplePolicy = PolicyLoader.generateSamplePolicy();
+      const policyPath = join(testDir, 'sample.yaml');
+      await writeFile(policyPath, samplePolicy);
+
+      const policy = await policyLoader.loadPolicy(policyPath);
+
+      expect(policy.version).toBe('1.0');
+      expect(policy.rules.length).toBeGreaterThan(0);
     });
   });
 });

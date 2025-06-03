@@ -26,7 +26,7 @@ import type {
 export class AgentGuard {
   private policy: Policy | null = null;
   private readonly policyLoader: PolicyLoader;
-  private readonly hitlManager: HITLManager;
+  private hitlManager: HITLManager;
   private readonly logger: Logger;
   private readonly config: ResolvedAgentGuardConfig;
 
@@ -48,7 +48,7 @@ export class AgentGuard {
 
     this.logger = new Logger({ enabled: this.config.enableLogging ?? true });
     this.policyLoader = new PolicyLoader(this.logger);
-    this.hitlManager = new HITLManager(this.config.webhook ?? null, this.logger);
+    this.hitlManager = new HITLManager(null, this.logger);
   }
 
   /**
@@ -65,6 +65,9 @@ export class AgentGuard {
       } else {
         throw new PolicyLoadError('No policy or policyPath provided', undefined);
       }
+
+      const webhookConfig = this.policy.webhook || this.config.webhook || null;
+      this.hitlManager = new HITLManager(webhookConfig, this.logger);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
 
