@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { HITLManager } from '../../../src/lib/hitl-manager.js';
 import { Logger } from '../../../src/lib/logger.js';
 import { ApprovalTimeoutError, AgentGuardError } from '../../../src/lib/errors.js';
-import { createMockToolCall, delay } from '../../helpers/index.js';
+import { createMockToolCall, createMockApprovalResponse, delay } from '../../helpers/index.js';
 
 describe('HITLManager', () => {
   let manager: HITLManager;
@@ -57,6 +57,99 @@ describe('HITLManager', () => {
         expect.stringContaining('No webhook configured'),
         expect.any(Object),
       );
+    });
+
+    it('should cleanup pending request on webhook failure', async () => {
+      global.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
+
+      const manager = new HITLManager(
+        { url: 'https://example.com/webhook' },
+        new Logger({ enabled: false }),
+      );
+      const toolCall = createMockToolCall();
+
+      await expect(manager.createApprovalRequest(toolCall)).rejects.toThrow(
+        'Failed to send approval request webhook',
+      );
+
+      // Should not have any pending approvals after webhook failure
+      expect(manager.getPendingApprovals()).toHaveLength(0);
+    });
+
+    it('should handle early approval response before waitForApproval', async () => {
+      global.fetch = vi
+        .fn()
+        .mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
+
+      const manager = new HITLManager(
+        { url: 'https://example.com/webhook' },
+        new Logger({ enabled: false }),
+      );
+      const toolCall = createMockToolCall();
+
+      const requestId = await manager.createApprovalRequest(toolCall);
+
+      // Simulate approval response arriving before waitForApproval is called
+      const response = createMockApprovalResponse({ requestId, decision: 'APPROVE' });
+      await manager.handleApprovalResponse(response);
+
+      // The response should be queued, not processed yet
+      expect(manager.getPendingApprovals()).toHaveLength(1);
+
+      // Now call waitForApproval - it should resolve immediately with the queued response
+      const startTime = Date.now();
+      const result = await manager.waitForApproval(requestId, 5000);
+      const elapsedTime = Date.now() - startTime;
+
+      expect(result).toMatchObject({
+        approved: true,
+        reason: 'Test approval',
+      });
+
+      // Should resolve immediately (within 50ms), not wait for timeout
+      expect(elapsedTime).toBeLessThan(50);
+
+      // Pending approval should be cleaned up
+      expect(manager.getPendingApprovals()).toHaveLength(0);
+    });
+
+    it('should handle race condition edge case with multiple rapid responses', async () => {
+      global.fetch = vi
+        .fn()
+        .mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
+
+      const logger = new Logger({ enabled: false });
+      const warnSpy = vi.spyOn(logger, 'warn');
+      const manager = new HITLManager({ url: 'https://example.com/webhook' }, logger);
+      const toolCall = createMockToolCall();
+
+      const requestId = await manager.createApprovalRequest(toolCall);
+
+      // Send first response before waitForApproval
+      const response1 = createMockApprovalResponse({
+        requestId,
+        decision: 'APPROVE',
+        reason: 'First response',
+      });
+      await manager.handleApprovalResponse(response1);
+
+      // Try to send second response (should warn about duplicate and overwrite)
+      const response2 = createMockApprovalResponse({
+        requestId,
+        decision: 'DENY',
+        reason: 'Second response',
+      });
+      await manager.handleApprovalResponse(response2);
+
+      // Should have logged a warning about duplicate delivery
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('duplicate early response'));
+
+      // waitForApproval should get the latest (second) response
+      const result = await manager.waitForApproval(requestId, 5000);
+      expect(result).toMatchObject({
+        approved: false,
+        reason: 'Second response',
+      });
     });
   });
 

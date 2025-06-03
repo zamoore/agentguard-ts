@@ -18,6 +18,10 @@ export class HITLManager {
       resolve: (result: HITLWorkflowResult) => void;
       reject: (error: Error) => void;
       timeoutId: NodeJS.Timeout;
+      // Store early response if it arrives before waitForApproval
+      earlyResponse?: HITLWorkflowResult;
+      // Track if waitForApproval has been called
+      waitingForApproval: boolean;
     }
   >();
 
@@ -38,12 +42,17 @@ export class HITLManager {
       expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(), // 30 minutes
     };
 
-    // Store the request in pending approvals (handlers will be set by waitForApproval)
+    // Initialize the pending approval with proper placeholder handlers
     this.pendingApprovals.set(requestId, {
       request,
-      resolve: () => {}, // Placeholder, will be updated by waitForApproval
-      reject: () => {}, // Placeholder, will be updated by waitForApproval
+      resolve: () => {
+        this.logger.warn(`Resolve called before waitForApproval for request ${requestId}`);
+      },
+      reject: () => {
+        this.logger.warn(`Reject called before waitForApproval for request ${requestId}`);
+      },
       timeoutId: null as any, // Will be set by waitForApproval
+      waitingForApproval: false,
     });
 
     this.logger.info(`Created approval request: ${requestId}`, { request });
@@ -54,6 +63,8 @@ export class HITLManager {
         await this.sendWebhook(request);
         this.logger.info(`Webhook sent for approval request: ${requestId}`);
       } catch (error) {
+        // Clean up the pending request on webhook failure
+        this.pendingApprovals.delete(requestId);
         this.logger.error(`Failed to send webhook for approval request: ${requestId}`, error);
         throw new AgentGuardError(
           `Failed to send approval request webhook: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -77,17 +88,25 @@ export class HITLManager {
     const startTime = Date.now();
 
     return new Promise<HITLWorkflowResult>((resolve, reject) => {
-      // Set up timeout
-      const timeoutId = setTimeout(() => {
-        this.pendingApprovals.delete(requestId);
-        reject(
-          new ApprovalTimeoutError(`Approval request timed out after ${timeout}ms`, requestId),
-        );
-      }, timeout);
-
       // Check if we already have this request (from createApprovalRequest)
       const existingEntry = this.pendingApprovals.get(requestId);
       if (existingEntry) {
+        // Check if we already received an early response
+        if (existingEntry.earlyResponse) {
+          this.logger.debug(`Found early response for request: ${requestId}`);
+          this.pendingApprovals.delete(requestId);
+          resolve(existingEntry.earlyResponse);
+          return;
+        }
+
+        // Set up timeout
+        const timeoutId = setTimeout(() => {
+          this.pendingApprovals.delete(requestId);
+          reject(
+            new ApprovalTimeoutError(`Approval request timed out after ${timeout}ms`, requestId),
+          );
+        }, timeout);
+
         // Update the existing entry with the promise handlers and timeout
         existingEntry.resolve = (result: HITLWorkflowResult) => {
           clearTimeout(timeoutId);
@@ -98,7 +117,16 @@ export class HITLManager {
           reject(error);
         };
         existingEntry.timeoutId = timeoutId;
+        existingEntry.waitingForApproval = true;
       } else {
+        // Set up timeout
+        const timeoutId = setTimeout(() => {
+          this.pendingApprovals.delete(requestId);
+          reject(
+            new ApprovalTimeoutError(`Approval request timed out after ${timeout}ms`, requestId),
+          );
+        }, timeout);
+
         // Store the pending approval (fallback if createApprovalRequest wasn't called)
         this.pendingApprovals.set(requestId, {
           request: {
@@ -115,6 +143,7 @@ export class HITLManager {
             reject(error);
           },
           timeoutId,
+          waitingForApproval: true,
         });
       }
 
@@ -147,10 +176,23 @@ export class HITLManager {
       responseTime,
     };
 
-    // Remove from pending and resolve
-    this.pendingApprovals.delete(response.requestId);
-    clearTimeout(pending.timeoutId);
-    pending.resolve(result);
+    // Check if waitForApproval has been called (real handlers are set)
+    if (pending.waitingForApproval) {
+      // Real handlers are set, resolve immediately
+      this.pendingApprovals.delete(response.requestId);
+      clearTimeout(pending.timeoutId);
+      pending.resolve(result);
+    } else {
+      // waitForApproval hasn't been called yet, store the early response
+      if (pending.earlyResponse) {
+        this.logger.warn(
+          `Received duplicate early response for request: ${response.requestId}. This may indicate duplicate webhook delivery.`,
+        );
+      } else {
+        this.logger.debug(`Storing early response for request: ${response.requestId}`);
+      }
+      pending.earlyResponse = result;
+    }
   }
 
   /**

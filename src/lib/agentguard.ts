@@ -90,6 +90,15 @@ export class AgentGuard {
       metadata?: Record<string, unknown>;
     },
   ): WrappedTool<T> {
+    // Validate inputs
+    if (!toolName || typeof toolName !== 'string' || toolName.trim().length === 0) {
+      throw new AgentGuardError('Tool name must be a non-empty string', 'INVALID_TOOL_NAME');
+    }
+
+    if (typeof toolFunction !== 'function') {
+      throw new AgentGuardError('Tool function must be a function', 'INVALID_TOOL_FUNCTION');
+    }
+
     const wrappedFunction = async (...args: Parameters<T>): Promise<Awaited<ReturnType<T>>> => {
       // Create tool call object
       const toolCall: ToolCall = {
@@ -328,11 +337,34 @@ export class AgentGuard {
    * Extract field value from context using dot notation
    */
   private extractFieldValue(field: string, context: PolicyEvaluationContext): unknown {
+    if (!field || typeof field !== 'string') {
+      return undefined;
+    }
+
     const parts = field.split('.');
     let value: any = context;
 
     for (const part of parts) {
-      if (value && typeof value === 'object' && part in value) {
+      if (value === null || value === undefined) {
+        return undefined;
+      }
+
+      // Handle array indexing (e.g., "items[0]" or "items.0")
+      const arrayMatch = part.match(/^(.+)\[(\d+)\]$/);
+      if (arrayMatch) {
+        const [, arrayName, indexStr] = arrayMatch;
+        if (arrayName && indexStr && value && typeof value === 'object' && arrayName in value) {
+          const arrayValue = value[arrayName];
+          const index = parseInt(indexStr, 10);
+          if (Array.isArray(arrayValue) && index >= 0 && index < arrayValue.length) {
+            value = arrayValue[index];
+          } else {
+            return undefined;
+          }
+        } else {
+          return undefined;
+        }
+      } else if (value && typeof value === 'object' && part in value) {
         value = value[part];
       } else {
         return undefined;

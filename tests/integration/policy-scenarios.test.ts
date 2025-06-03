@@ -260,4 +260,94 @@ describe('Policy Scenarios Integration', () => {
       await expect(stagingWrite()).rejects.toThrow();
     });
   });
+
+  describe('field extraction edge cases', () => {
+    it('should handle array indexing in field paths', async () => {
+      const policy: Policy = {
+        version: '1.0',
+        name: 'Array Indexing Test',
+        defaultAction: 'BLOCK',
+        rules: [
+          {
+            name: 'allow-first-user',
+            priority: 10,
+            action: 'ALLOW',
+            conditions: [
+              { field: 'toolCall.parameters.users[0].role', operator: 'equals', value: 'admin' },
+            ],
+          },
+          {
+            name: 'block-second-user',
+            priority: 20,
+            action: 'BLOCK',
+            conditions: [
+              { field: 'toolCall.parameters.users[1].role', operator: 'equals', value: 'guest' },
+            ],
+          },
+        ],
+      };
+
+      const guard = new AgentGuard({ policy, enableLogging: false });
+      await guard.initialize();
+
+      const testTool = guard.protect('test', (params: any) => params);
+
+      // First user is admin - should allow
+      await expect(
+        testTool({
+          users: [
+            { role: 'admin', name: 'admin-user' },
+            { role: 'user', name: 'regular-user' },
+          ],
+        }),
+      ).resolves.toBeDefined();
+
+      // Second user is guest - should block (higher priority rule)
+      await expect(
+        testTool({
+          users: [
+            { role: 'admin', name: 'admin-user' },
+            { role: 'guest', name: 'guest-user' },
+          ],
+        }),
+      ).rejects.toThrow();
+
+      // Missing array index - should use default action (BLOCK)
+      await expect(testTool({ users: [{ role: 'user' }] })).rejects.toThrow();
+    });
+
+    it('should handle null and undefined values gracefully', async () => {
+      const policy: Policy = {
+        version: '1.0',
+        name: 'Null Handling Test',
+        defaultAction: 'BLOCK',
+        rules: [
+          {
+            name: 'allow-when-valid',
+            action: 'ALLOW',
+            conditions: [
+              { field: 'toolCall.parameters.nested.value', operator: 'equals', value: 'valid' },
+            ],
+          },
+        ],
+      };
+
+      const guard = new AgentGuard({ policy, enableLogging: false });
+      await guard.initialize();
+
+      const testTool = guard.protect('test', (params: any) => params);
+
+      // Valid nested value - should allow
+      await expect(testTool({ nested: { value: 'valid' } })).resolves.toBeDefined();
+
+      // Null nested object - should block (use default)
+      await expect(testTool({ nested: null })).rejects.toThrow();
+
+      // Undefined nested object - should block (use default)
+      await expect(testTool({ nested: undefined })).rejects.toThrow();
+
+      // Missing nested property - should block (use default)
+      await expect(testTool({})).rejects.toThrow();
+    });
+  });
 });

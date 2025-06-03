@@ -65,6 +65,29 @@ describe('AgentGuard', () => {
       expect(wrapped.__original_function).toBe(mockTools.simpleFunction);
     });
 
+    it('should validate tool name', () => {
+      expect(() => guard.protect('', mockTools.simpleFunction)).toThrow(
+        'Tool name must be a non-empty string',
+      );
+      expect(() => guard.protect('   ', mockTools.simpleFunction)).toThrow(
+        'Tool name must be a non-empty string',
+      );
+      expect(() => guard.protect(null as any, mockTools.simpleFunction)).toThrow(
+        'Tool name must be a non-empty string',
+      );
+      expect(() => guard.protect(123 as any, mockTools.simpleFunction)).toThrow(
+        'Tool name must be a non-empty string',
+      );
+    });
+
+    it('should validate tool function', () => {
+      expect(() => guard.protect('test', null as any)).toThrow('Tool function must be a function');
+      expect(() => guard.protect('test', 'not-a-function' as any)).toThrow(
+        'Tool function must be a function',
+      );
+      expect(() => guard.protect('test', 123 as any)).toThrow('Tool function must be a function');
+    });
+
     it('should throw if not initialized', async () => {
       const uninitializedGuard = new AgentGuard({ policy: allowPolicy, enableLogging: false });
       const wrapped = uninitializedGuard.protect('test', mockTools.simpleFunction);
