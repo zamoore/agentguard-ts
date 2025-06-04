@@ -4,9 +4,9 @@ import type { WebhookSecurityConfig } from '../types.js';
 
 export class WebhookSecurity {
   private readonly algorithm = 'aes-256-gcm';
-  private readonly signatureHeader = 'X-AgentGuard-Signature';
-  private readonly timestampHeader = 'X-AgentGuard-Timestamp';
-  private readonly nonceHeader = 'X-AgentGuard-Nonce';
+  private readonly signatureHeader = 'x-agentguard-signature';
+  private readonly timestampHeader = 'x-agentguard-timestamp';
+  private readonly nonceHeader = 'x-agentguard-nonce';
 
   constructor(private readonly config: WebhookSecurityConfig) {
     if (!config.signingSecret || config.signingSecret.length < 32) {
@@ -111,9 +111,9 @@ export class WebhookSecurity {
     body: string,
     headers: Record<string, string>,
   ): { valid: boolean; reason?: string } {
-    const signature = headers[this.signatureHeader.toLowerCase()];
-    const timestamp = headers[this.timestampHeader.toLowerCase()];
-    const nonce = headers[this.nonceHeader.toLowerCase()];
+    const signature = headers[this.signatureHeader];
+    const timestamp = headers[this.timestampHeader];
+    const nonce = headers[this.nonceHeader];
 
     if (!signature || !timestamp || !nonce) {
       return {

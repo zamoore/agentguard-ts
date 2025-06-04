@@ -172,7 +172,14 @@ export class HITLManager {
     headers?: Record<string, string>,
   ): Promise<void> {
     // Validate the response if security is enabled
-    if (this.webhookSecurity && headers) {
+    if (this.webhookSecurity) {
+      if (!headers) {
+        throw new AgentGuardError(
+          'Invalid approval response: Missing required security headers',
+          'INVALID_RESPONSE_SIGNATURE',
+        );
+      }
+
       const responseBody = JSON.stringify(response);
       const validation = this.webhookSecurity.validateResponse(responseBody, headers);
 

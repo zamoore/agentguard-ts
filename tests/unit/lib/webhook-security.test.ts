@@ -158,9 +158,9 @@ describe('WebhookSecurity', () => {
       const payload = JSON.stringify({ test: 'data' });
       const headers = security.generateHeaders(payload);
 
-      expect(headers).toHaveProperty('X-AgentGuard-Signature');
-      expect(headers).toHaveProperty('X-AgentGuard-Timestamp');
-      expect(headers).toHaveProperty('X-AgentGuard-Nonce');
+      expect(headers).toHaveProperty('x-agentguard-signature');
+      expect(headers).toHaveProperty('x-agentguard-timestamp');
+      expect(headers).toHaveProperty('x-agentguard-nonce');
       expect(headers).toHaveProperty('Content-Type', 'application/json');
       expect(headers).toHaveProperty('User-Agent', 'AgentGuard/1.0');
     });
@@ -171,9 +171,9 @@ describe('WebhookSecurity', () => {
 
       const isValid = security.verifySignature(
         payload,
-        headers['X-AgentGuard-Signature'],
-        parseInt(headers['X-AgentGuard-Timestamp'], 10),
-        headers['X-AgentGuard-Nonce'],
+        headers['x-agentguard-signature'],
+        parseInt(headers['x-agentguard-timestamp'], 10),
+        headers['x-agentguard-nonce'],
       );
 
       expect(isValid).toBe(true);
@@ -185,12 +185,7 @@ describe('WebhookSecurity', () => {
       const body = JSON.stringify({ status: 'ok' });
       const headers = security.generateHeaders(body);
 
-      // Convert to lowercase as HTTP headers are case-insensitive
-      const lowercaseHeaders = Object.fromEntries(
-        Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]),
-      );
-
-      const result = security.validateResponse(body, lowercaseHeaders);
+      const result = security.validateResponse(body, headers);
       expect(result.valid).toBe(true);
       expect(result.reason).toBeUndefined();
     });
