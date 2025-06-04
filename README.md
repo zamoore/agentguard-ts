@@ -2,6 +2,17 @@
 
 A security toolkit that gives developers control over their AI agents by intercepting and governing tool calls with declarative policies.
 
+## 🚀 Free for Legitimate Use
+
+**AgentGuard is free to use** for securing your AI agents, integrating into your applications, and commercial use. The only restrictions are on building competing products like policy management dashboards or offering AgentGuard as a service.
+
+✅ **Use freely for**: AI agent security, internal applications, commercial products  
+❌ **License required for**: Competing governance products, hosted services, enterprise dashboards
+
+**[See License FAQ](./LICENSE-FAQ.md)** | **[Quick Legal Check](mailto:license@agentguard.dev)**
+
+---
+
 ## Overview
 
 **AgentGuard is not another agent framework** — it's a specialized governance layer that makes existing agents safer through declarative policy management.
@@ -189,6 +200,49 @@ Unlike agent frameworks that provide building blocks, AgentGuard focuses specifi
 ✅ **Auditable** - Clear rules that non-developers can understand  
 ✅ **Hot-Reloadable** - Update security without restarts
 
+## 📜 Licensing & Enterprise
+
+### **Free for Legitimate Use**
+
+AgentGuard uses the **Business Source License (BSL)** which means:
+
+✅ **FREE for most use cases:**
+
+- Securing your AI agents and applications
+- Commercial use for its intended purpose
+- Integrating into your products and services
+- Modifying for your own needs
+
+❌ **Requires enterprise license for:**
+
+- Building competing policy management dashboards
+- Offering AgentGuard as a hosted service
+- Creating derivative governance platforms
+- Adding and distributing enterprise features
+
+### **Becomes MIT Licensed in 2029**
+
+On January 1, 2029, AgentGuard automatically becomes MIT licensed (fully open source) for everyone.
+
+### **Enterprise Features Coming Soon**
+
+We're building enterprise features for organizations that need:
+
+- **Policy Management Dashboard** - Web-based policy editing and management
+- **SSO Integration** - Enterprise authentication (Okta, Azure AD, etc.)
+- **Advanced Analytics** - Real-time monitoring and usage analytics
+- **Compliance Reporting** - Automated audit trails and compliance reports
+- **Professional Support** - SLA-backed support and professional services
+
+### **Legal Resources**
+
+- 📋 **[License FAQ](./LICENSE-FAQ.md)** - Comprehensive Q&A for enterprises
+- 📄 **[Full License](./LICENSE)** - Complete BSL terms
+- 💬 **Questions?** Email [license@agentguard.dev](mailto:license@agentguard.dev)
+- 🏢 **Enterprise licensing:** [enterprise@agentguard.dev](mailto:enterprise@agentguard.dev)
+
+**👋 Enterprise teams:** We're happy to clarify any licensing questions and provide legal documentation for your approval process.
+
 ## Development
 
 ```bash
@@ -198,6 +252,25 @@ pnpm test          # Run tests
 pnpm test:coverage # Test coverage
 ```
 
+## Contributing
+
+We welcome contributions! All contributions are licensed under the same BSL terms.
+
+**High priority contributions:**
+
+- Bug fixes and security improvements
+- Documentation and examples
+- Integration guides for popular agent frameworks
+- Policy examples for common use cases
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
 ## License
 
-MIT © [Zack Moore](https://github.com/zamoore)
+Business Source License 1.1 - see [LICENSE](./LICENSE) for full terms.
+
+**TL;DR**: Free for legitimate use, becomes MIT licensed in 2029. See [LICENSE-FAQ.md](./LICENSE-FAQ.md) for details.
+
+---
+
+**Questions?** [Create an issue](https://github.com/zamoore/agentguard-node/issues) or [start a discussion](https://github.com/zamoore/agentguard-node/discussions)

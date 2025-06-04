@@ -1,7 +1,7 @@
 {
   "name": "@zamoore/agentguard-ts",
   "version": "0.1.0",
-  "description": "A Node.js package for AgentGuard",
+  "description": "Security toolkit for AI agents with declarative policy-based tool call governance",
   "type": "module",
   "exports": {
     ".": {
@@ -13,10 +13,15 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "agentguard": "./dist/cli.js"
+  },
   "files": [
     "dist",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "LICENSE",
+    "LICENSE-FAQ.md"
   ],
   "scripts": {
     "generate:version": "tsx scripts/generate-version.ts",
@@ -44,17 +49,33 @@
     "release": "changeset publish",
     "changeset": "changeset"
   },
-  "keywords": [],
-  "author": "zamoore <zack.moore89@gmail.com>",
-  "license": "MIT",
+  "keywords": [
+    "ai",
+    "agents",
+    "security",
+    "governance",
+    "policy",
+    "tool-calls",
+    "llm",
+    "safety",
+    "mcp",
+    "agent-framework",
+    "human-in-the-loop"
+  ],
+  "author": "Zack Moore <zack.moore89@gmail.com>",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/your-repo.git"
+    "url": "https://github.com/zamoore/agentguard-node.git"
   },
   "bugs": {
-    "url": "https://github.com/your-username/your-repo/issues"
+    "url": "https://github.com/zamoore/agentguard-node/issues"
   },
-  "homepage": "https://github.com/your-username/your-repo#readme",
+  "homepage": "https://github.com/zamoore/agentguard-node#readme",
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/zamoore"
+  },
   "engines": {
     "node": ">=18.0.0",
     "pnpm": ">=8.0.0"
