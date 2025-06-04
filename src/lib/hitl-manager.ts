@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto';
+import { WebhookSecurity } from './webhook-security.js';
+
 import type {
   ToolCall,
   ApprovalRequest,
@@ -11,6 +13,10 @@ import { ApprovalTimeoutError, AgentGuardError } from './errors.js';
 import type { Logger } from './logger.js';
 
 export class HITLManager {
+  private webhookSecurity?: WebhookSecurity;
+  private readonly processedNonces = new Map<string, number>();
+  private nonceCleanupInterval?: NodeJS.Timeout;
+
   private readonly pendingApprovals = new Map<
     string,
     {
@@ -28,7 +34,14 @@ export class HITLManager {
   constructor(
     private readonly webhookConfig: WebhookConfig | null,
     private readonly logger: Logger,
-  ) {}
+  ) {
+    // Initialize webhook security if configured
+    if (webhookConfig?.security) {
+      this.webhookSecurity = new WebhookSecurity(webhookConfig.security);
+      // Cleanup nonces every 10 minutes
+      this.nonceCleanupInterval = setInterval(() => this.cleanupNonces(), 10 * 60 * 1000);
+    }
+  }
 
   /**
    * Create an approval request and send it via webhook
@@ -154,7 +167,35 @@ export class HITLManager {
   /**
    * Handle approval response from external system
    */
-  async handleApprovalResponse(response: ApprovalResponse): Promise<void> {
+  async handleApprovalResponse(
+    response: ApprovalResponse,
+    headers?: Record<string, string>,
+  ): Promise<void> {
+    // Validate the response if security is enabled
+    if (this.webhookSecurity && headers) {
+      const responseBody = JSON.stringify(response);
+      const validation = this.webhookSecurity.validateResponse(responseBody, headers);
+
+      if (!validation.valid) {
+        throw new AgentGuardError(
+          `Invalid approval response: ${validation.reason}`,
+          'INVALID_RESPONSE_SIGNATURE',
+        );
+      }
+
+      // Check nonce to prevent replay attacks
+      const nonce = headers['x-agentguard-nonce'];
+      if (nonce) {
+        if (this.processedNonces.has(nonce)) {
+          throw new AgentGuardError(
+            'Duplicate nonce detected - possible replay attack',
+            'DUPLICATE_NONCE',
+          );
+        }
+        this.processedNonces.set(nonce, Date.now());
+      }
+    }
+
     const pending = this.pendingApprovals.get(response.requestId);
 
     if (!pending) {
@@ -203,23 +244,41 @@ export class HITLManager {
       throw new AgentGuardError('No webhook configuration available', 'NO_WEBHOOK_CONFIG');
     }
 
-    const payload = {
+    let payload = {
       type: 'approval_request',
       request,
       timestamp: new Date().toISOString(),
     };
 
-    for (let attempt = 1; attempt <= (this.webhookConfig.retries || 3); attempt++) {
+    // Encrypt sensitive data if configured
+    if (this.webhookSecurity && this.webhookConfig.security?.encryptSensitiveData) {
+      payload = this.encryptSensitiveData(payload);
+    }
+
+    const payloadString = JSON.stringify(payload);
+
+    // Generate security headers
+    const securityHeaders = this.webhookSecurity
+      ? this.webhookSecurity.generateHeaders(payloadString)
+      : {};
+
+    // Default headers for webhook requests
+    const defaultHeaders = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'AgentGuard/1.0',
+    };
+
+    for (let attempt = 1; attempt <= (this.webhookConfig.retries ?? 3); attempt++) {
       try {
         const response = await fetch(this.webhookConfig.url, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': 'AgentGuard/1.0',
+            ...defaultHeaders,
+            ...securityHeaders,
             ...this.webhookConfig.headers,
           },
-          body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(this.webhookConfig.timeout || 10000),
+          body: payloadString,
+          signal: AbortSignal.timeout(this.webhookConfig.timeout ?? 10000),
         });
 
         if (!response.ok) {
@@ -237,7 +296,7 @@ export class HITLManager {
           error: error instanceof Error ? error.message : 'Unknown error',
         });
 
-        if (attempt === (this.webhookConfig.retries || 3)) {
+        if (attempt === (this.webhookConfig.retries ?? 3)) {
           throw error;
         }
 
@@ -337,5 +396,67 @@ export class HITLManager {
       oldestRequestAge: oldestAge,
       averageWaitTime: averageAge,
     };
+  }
+
+  private encryptSensitiveData(payload: any): any {
+    if (!this.webhookSecurity || !this.webhookConfig?.security?.sensitiveFields) {
+      return payload;
+    }
+
+    const result = JSON.parse(JSON.stringify(payload)); // Deep clone
+    const sensitiveFields = this.webhookConfig.security.sensitiveFields;
+
+    const encryptField = (obj: any, path: string) => {
+      const parts = path.split('.');
+
+      let current = obj;
+
+      for (let i = 0; i < parts.length - 1; i++) {
+        const part = parts[i];
+
+        if (!part || !current[part]) {
+          return;
+        }
+
+        current = current[part];
+      }
+
+      const fieldName = parts[parts.length - 1];
+
+      if (fieldName && current[fieldName] !== undefined) {
+        const encrypted = this.webhookSecurity!.encryptPayload({
+          value: current[fieldName],
+        });
+
+        current[fieldName] = {
+          ...encrypted,
+        };
+      }
+    };
+
+    for (const field of sensitiveFields) {
+      encryptField(result, field);
+    }
+
+    return result;
+  }
+
+  private cleanupNonces(): void {
+    const now = Date.now();
+    const maxAge = 10 * 60 * 1000; // 10 minutes
+
+    for (const [nonce, timestamp] of this.processedNonces.entries()) {
+      if (now - timestamp > maxAge) {
+        this.processedNonces.delete(nonce);
+      }
+    }
+
+    this.logger.debug(`Cleaned up old nonces, ${this.processedNonces.size} remaining`);
+  }
+
+  destroy(): void {
+    if (this.nonceCleanupInterval) {
+      clearInterval(this.nonceCleanupInterval);
+    }
   }
 }

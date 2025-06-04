@@ -419,8 +419,11 @@ export class AgentGuard {
   /**
    * Handle approval response from external system
    */
-  async handleApprovalResponse(response: ApprovalResponse): Promise<void> {
-    await this.hitlManager.handleApprovalResponse(response);
+  async handleApprovalResponse(
+    response: ApprovalResponse,
+    headers: Record<string, string>,
+  ): Promise<void> {
+    await this.hitlManager.handleApprovalResponse(response, headers);
   }
 
   /**

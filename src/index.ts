@@ -14,6 +14,7 @@ export { AgentGuard } from './lib/agentguard.js';
 export { PolicyLoader } from './lib/policy-loader.js';
 export { HITLManager } from './lib/hitl-manager.js';
 export { Logger } from './lib/logger.js';
+export { WebhookSecurity } from './lib/webhook-security.js';
 
 // Type exports
 export type {
@@ -35,6 +36,7 @@ export type {
   ApprovalResponse,
   HITLWorkflowResult,
   WebhookConfig,
+  WebhookSecurityConfig,
 
   // Utility types
   LogLevel,

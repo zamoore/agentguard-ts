@@ -29,7 +29,10 @@ describe('HITLManager', () => {
           method: 'POST',
           headers: expect.objectContaining({
             'Content-Type': 'application/json',
+            'User-Agent': 'AgentGuard/1.0',
           }),
+          body: expect.any(String),
+          signal: expect.any(AbortSignal),
         }),
       );
     });

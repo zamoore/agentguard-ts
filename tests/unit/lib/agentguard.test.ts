@@ -244,9 +244,9 @@ describe('AgentGuard', () => {
         mockHandleApprovalResponse,
       );
 
-      await guard.handleApprovalResponse(mockResponse);
+      await guard.handleApprovalResponse(mockResponse, {});
 
-      expect(mockHandleApprovalResponse).toHaveBeenCalledWith(mockResponse);
+      expect(mockHandleApprovalResponse).toHaveBeenCalledWith(mockResponse, {});
     });
   });
 });

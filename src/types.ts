@@ -41,11 +41,19 @@ export type Policy = {
   readonly webhook?: WebhookConfig;
 };
 
+export type WebhookSecurityConfig = {
+  readonly signingSecret: string;
+  readonly encryptionKey?: string;
+  readonly encryptSensitiveData?: boolean;
+  readonly sensitiveFields?: string[];
+};
+
 export type WebhookConfig = {
   readonly url: string;
   readonly timeout?: number;
   readonly retries?: number;
   readonly headers?: Record<string, string>;
+  readonly security?: WebhookSecurityConfig;
 };
 
 export type ApprovalRequest = {
