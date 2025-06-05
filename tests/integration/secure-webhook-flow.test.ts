@@ -444,6 +444,86 @@ describe('Secure Webhook Flow Integration', () => {
     });
   });
 
+  it('should prevent request ID tampering in response body', async () => {
+    guard = new AgentGuard({
+      policy: {
+        version: '1.0',
+        name: 'Test Policy',
+        defaultAction: 'REQUIRE_HUMAN_APPROVAL',
+        rules: [],
+      },
+      webhook: secureWebhookConfig,
+      enableLogging: false,
+      timeout: 1000,
+    });
+    await guard.initialize();
+
+    // Create two different tool calls
+    const tool1 = guard.protect('transfer-small', (params: any) => ({
+      result: 'small-transfer',
+      ...params,
+    }));
+    const tool2 = guard.protect('transfer-large', (params: any) => ({
+      result: 'large-transfer',
+      ...params,
+    }));
+
+    // Start both approvals
+    const promise1 = tool1({ amount: 100 });
+    const promise2 = tool2({ amount: 10000 });
+
+    await delay(100);
+
+    // Get both webhook requests
+    expect(webhookRequests).toHaveLength(2);
+    const webhook1 = JSON.parse(webhookRequests[0].options.body);
+    const webhook2 = JSON.parse(webhookRequests[1].options.body);
+
+    // Create a valid approval for request 1
+    const approval1: ApprovalResponse = {
+      requestId: webhook1.request.id,
+      decision: 'APPROVE',
+      reason: 'Small transfer approved',
+      approvedBy: 'admin@example.com',
+    };
+
+    // Generate valid headers for request 1
+    const responseBody1 = JSON.stringify(approval1);
+    const headers1 = webhookSecurity.generateHeaders(responseBody1, webhook1.request.id);
+
+    // Now tamper with the body to try to approve request 2 instead
+    const tamperedApproval: ApprovalResponse = {
+      requestId: webhook2.request.id, // Changed to target the large transfer!
+      decision: 'APPROVE',
+      reason: 'Small transfer approved',
+      approvedBy: 'admin@example.com',
+    };
+
+    // Try to use the headers from request 1 with the tampered body
+    // This should fail because the headers are for request 1 but trying to approve request 2
+    await expect(guard.handleApprovalResponse(tamperedApproval, headers1)).rejects.toThrow(
+      'Invalid approval response: Request ID mismatch',
+    );
+
+    // Also test the case where header and body request IDs don't match
+    const mismatchedHeaders = {
+      ...headers1,
+      'x-agentguard-request-id': webhook2.request.id, // Changed header but signature still wrong
+    };
+
+    await expect(guard.handleApprovalResponse(tamperedApproval, mismatchedHeaders)).rejects.toThrow(
+      'Invalid approval response: Invalid signature',
+    );
+
+    // Verify that request 1 can still be properly approved with correct data
+    await guard.handleApprovalResponse(approval1, headers1);
+    const result1 = await promise1;
+    expect(result1).toEqual({ result: 'small-transfer', amount: 100 });
+
+    // Verify that request 2 is still pending and will timeout
+    await expect(promise2).rejects.toThrow('Approval request timed out');
+  });
+
   it('should prevent signature substitution attacks', async () => {
     guard = new AgentGuard({
       policy: {

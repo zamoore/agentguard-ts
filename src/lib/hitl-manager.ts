@@ -174,9 +174,6 @@ export class HITLManager {
     const pending = this.pendingApprovals.get(response.requestId);
 
     if (!pending) {
-      this.logger.warn(`Received approval response for unknown request: ${response.requestId}`, {
-        response,
-      });
       throw new AgentGuardError(
         `Unknown approval request ID: ${response.requestId}`,
         'UNKNOWN_REQUEST_ID',
@@ -192,17 +189,28 @@ export class HITLManager {
         );
       }
 
+      // First use validateResponse to check for missing headers and basic validation
       const responseBody = JSON.stringify(response);
       const validation = this.webhookSecurity.validateResponse(
         responseBody,
         headers,
-        response.requestId,
+        pending.request.id,
       );
 
       if (!validation.valid) {
         throw new AgentGuardError(
           `Invalid approval response: ${validation.reason}`,
           'INVALID_RESPONSE_SIGNATURE',
+        );
+      }
+
+      // Additional check: ensure header request ID matches body request ID
+      // This catches body tampering attempts with valid headers for different requests
+      const headerRequestId = headers['x-agentguard-request-id'];
+      if (headerRequestId !== response.requestId) {
+        throw new AgentGuardError(
+          'Request ID mismatch between body and headers',
+          'REQUEST_ID_MISMATCH',
         );
       }
 
@@ -219,7 +227,12 @@ export class HITLManager {
       }
     }
 
-    this.logger.info(`Received approval response: ${response.requestId}`, { response });
+    this.logger.info(`Received approval response`, {
+      requestId: response.requestId,
+      headerRequestId: headers?.['x-agentguard-request-id'],
+      storedRequestId: pending.request.id,
+      match: response.requestId === pending.request.id,
+    });
     const responseTime = Date.now() - new Date(pending.request.timestamp).getTime();
     const result: HITLWorkflowResult = {
       approved: response.decision === 'APPROVE',
