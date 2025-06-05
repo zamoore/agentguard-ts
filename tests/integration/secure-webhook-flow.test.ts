@@ -70,6 +70,7 @@ describe('Secure Webhook Flow Integration', () => {
       const headers = webhookRequests[0].options.headers;
 
       expect(headers).toHaveProperty('x-agentguard-signature');
+      expect(headers).toHaveProperty('x-agentguard-request-id');
       expect(headers).toHaveProperty('x-agentguard-timestamp');
       expect(headers).toHaveProperty('x-agentguard-nonce');
       expect(headers).toHaveProperty('Content-Type', 'application/json');
@@ -77,10 +78,12 @@ describe('Secure Webhook Flow Integration', () => {
 
       // Verify signature is valid
       const body = webhookRequests[0].options.body;
+      const requestId = webhookRequests[0].options.headers['x-agentguard-request-id'];
       const timestamp = parseInt(headers['x-agentguard-timestamp'], 10);
       const isValid = webhookSecurity.verifySignature(
         body,
         headers['x-agentguard-signature'],
+        requestId,
         timestamp,
         headers['x-agentguard-nonce'],
       );
@@ -274,7 +277,7 @@ describe('Secure Webhook Flow Integration', () => {
       };
 
       const responseBody = JSON.stringify(approvalResponse);
-      const responseHeaders = webhookSecurity.generateHeaders(responseBody);
+      const responseHeaders = webhookSecurity.generateHeaders(responseBody, requestId);
 
       await guard.handleApprovalResponse(approvalResponse, responseHeaders);
 
@@ -315,6 +318,7 @@ describe('Secure Webhook Flow Integration', () => {
         'x-agentguard-signature': 'invalid-signature',
         'x-agentguard-timestamp': Date.now().toString(),
         'x-agentguard-nonce': 'test-nonce',
+        'x-agentguard-request-id': requestId,
       };
 
       await expect(guard.handleApprovalResponse(approvalResponse, responseHeaders)).rejects.toThrow(
@@ -389,7 +393,7 @@ describe('Secure Webhook Flow Integration', () => {
       };
 
       const responseBody = JSON.stringify(approvalResponse);
-      const responseHeaders = webhookSecurity.generateHeaders(responseBody);
+      const responseHeaders = webhookSecurity.generateHeaders(responseBody, requestId);
 
       // First response should succeed
       await guard.handleApprovalResponse(approvalResponse, responseHeaders);
@@ -421,6 +425,7 @@ describe('Secure Webhook Flow Integration', () => {
       // Generate a valid signature for the second body but with the reused nonce
       const replayedSignature = webhookSecurity.signPayload(
         secondResponseBody,
+        webhookPayload2.request.id, // Use the correct request ID for the second request
         parseInt(originalTimestamp, 10),
         originalNonce,
       );
@@ -429,6 +434,7 @@ describe('Secure Webhook Flow Integration', () => {
         'x-agentguard-signature': replayedSignature,
         'x-agentguard-timestamp': originalTimestamp,
         'x-agentguard-nonce': originalNonce,
+        'x-agentguard-request-id': webhookPayload2.request.id, // Add the required request ID header
       };
 
       // This should fail due to nonce reuse, not signature validation
@@ -436,6 +442,72 @@ describe('Secure Webhook Flow Integration', () => {
         'Duplicate nonce detected - possible replay attack',
       );
     });
+  });
+
+  it('should prevent signature substitution attacks', async () => {
+    guard = new AgentGuard({
+      policy: {
+        version: '1.0',
+        name: 'Test Policy',
+        defaultAction: 'REQUIRE_HUMAN_APPROVAL',
+        rules: [],
+      },
+      webhook: secureWebhookConfig,
+      enableLogging: false,
+      timeout: 1000,
+    });
+    await guard.initialize();
+
+    // Create two different tool calls
+    const tool1 = guard.protect('low-risk-tool', () => ({ result: 'low-risk' }));
+    const tool2 = guard.protect('high-risk-tool', () => ({ result: 'high-risk' }));
+
+    // Start both approvals
+    const promise1 = tool1();
+    const promise2 = tool2();
+
+    await delay(100);
+
+    // Get both webhook requests
+    const webhook1 = JSON.parse(webhookRequests[0].options.body);
+    const webhook2 = JSON.parse(webhookRequests[1].options.body);
+
+    // Create approval for request 1
+    const approval1: ApprovalResponse = {
+      requestId: webhook1.request.id,
+      decision: 'APPROVE',
+      reason: 'Low risk approved',
+      approvedBy: 'admin@example.com',
+    };
+
+    const responseBody1 = JSON.stringify(approval1);
+    const headers1 = webhookSecurity.generateHeaders(responseBody1, webhook1.request.id);
+
+    // Try to use the signature from request 1 for request 2
+    const fakeApproval2: ApprovalResponse = {
+      requestId: webhook2.request.id,
+      decision: 'APPROVE',
+      reason: 'Fake approval',
+      approvedBy: 'attacker@example.com',
+    };
+
+    const fakeHeaders2 = {
+      ...headers1, // Reuse headers from request 1
+      'x-agentguard-request-id': webhook2.request.id, // But change the request ID
+    };
+
+    // This should fail due to signature mismatch
+    await expect(guard.handleApprovalResponse(fakeApproval2, fakeHeaders2)).rejects.toThrow(
+      'Invalid approval response: Invalid signature',
+    );
+
+    // Properly approve request 1
+    await guard.handleApprovalResponse(approval1, headers1);
+    const result1 = await promise1;
+    expect(result1).toEqual({ result: 'low-risk' });
+
+    // Request 2 should still be pending and timeout
+    await expect(promise2).rejects.toThrow('Approval request timed out');
   });
 
   describe('end-to-end secure workflow', () => {
@@ -484,16 +556,18 @@ describe('Secure Webhook Flow Integration', () => {
       expect(typeof apiKeyField.iv).toBe('string');
       expect(typeof apiKeyField.tag).toBe('string');
 
+      const { id: requestId } = webhookPayload.request;
+
       // Create signed approval
       const approvalResponse: ApprovalResponse = {
-        requestId: webhookPayload.request.id,
+        requestId,
         decision: 'APPROVE',
         reason: 'Payment approved',
         approvedBy: 'finance@example.com',
       };
 
       const responseBody = JSON.stringify(approvalResponse);
-      const responseHeaders = webhookSecurity.generateHeaders(responseBody);
+      const responseHeaders = webhookSecurity.generateHeaders(responseBody, requestId);
 
       await guard.handleApprovalResponse(approvalResponse, responseHeaders);
 
@@ -527,17 +601,18 @@ describe('Secure Webhook Flow Integration', () => {
       await delay(50);
 
       const webhookPayload = JSON.parse(webhookRequests[0].options.body);
+      const { id: requestId } = webhookPayload.request;
 
       // Create signed denial
       const denialResponse: ApprovalResponse = {
-        requestId: webhookPayload.request.id,
+        requestId,
         decision: 'DENY',
         reason: 'Operation too risky',
         approvedBy: 'security@example.com',
       };
 
       const responseBody = JSON.stringify(denialResponse);
-      const responseHeaders = webhookSecurity.generateHeaders(responseBody);
+      const responseHeaders = webhookSecurity.generateHeaders(responseBody, requestId);
 
       await guard.handleApprovalResponse(denialResponse, responseHeaders);
 

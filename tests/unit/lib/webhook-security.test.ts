@@ -34,32 +34,46 @@ describe('WebhookSecurity', () => {
   describe('signature generation and verification', () => {
     it('should generate consistent signatures', () => {
       const payload = JSON.stringify({ test: 'data' });
+      const requestId = 'req-123';
       const timestamp = Date.now();
       const nonce = 'test-nonce';
 
-      const sig1 = security.signPayload(payload, timestamp, nonce);
-      const sig2 = security.signPayload(payload, timestamp, nonce);
+      const sig1 = security.signPayload(payload, requestId, timestamp, nonce);
+      const sig2 = security.signPayload(payload, requestId, timestamp, nonce);
 
       expect(sig1).toBe(sig2);
     });
 
     it('should generate different signatures for different payloads', () => {
+      const requestId = 'req-123';
       const timestamp = Date.now();
       const nonce = 'test-nonce';
 
-      const sig1 = security.signPayload('payload1', timestamp, nonce);
-      const sig2 = security.signPayload('payload2', timestamp, nonce);
+      const sig1 = security.signPayload('payload1', requestId, timestamp, nonce);
+      const sig2 = security.signPayload('payload2', requestId, timestamp, nonce);
+
+      expect(sig1).not.toBe(sig2);
+    });
+
+    it('should generate different signatures for different request IDs', () => {
+      const payload = JSON.stringify({ test: 'data' });
+      const timestamp = Date.now();
+      const nonce = 'test-nonce';
+
+      const sig1 = security.signPayload(payload, 'req-123', timestamp, nonce);
+      const sig2 = security.signPayload(payload, 'req-456', timestamp, nonce);
 
       expect(sig1).not.toBe(sig2);
     });
 
     it('should verify valid signatures', () => {
       const payload = JSON.stringify({ test: 'data' });
+      const requestId = 'req-123';
       const timestamp = Date.now();
       const nonce = 'test-nonce';
 
-      const signature = security.signPayload(payload, timestamp, nonce);
-      const isValid = security.verifySignature(payload, signature, timestamp, nonce);
+      const signature = security.signPayload(payload, requestId, timestamp, nonce);
+      const isValid = security.verifySignature(payload, signature, requestId, timestamp, nonce);
 
       expect(isValid).toBe(true);
     });
@@ -69,29 +83,38 @@ describe('WebhookSecurity', () => {
       const timestamp = Date.now();
       const nonce = 'test-nonce';
 
-      const isValid = security.verifySignature(payload, 'invalid-signature', timestamp, nonce);
+      const signature = security.signPayload(payload, 'req-123', timestamp, nonce);
+      const isValid = security.verifySignature(payload, signature, 'req-456', timestamp, nonce);
 
       expect(isValid).toBe(false);
     });
 
     it('should reject old timestamps (replay attack prevention)', () => {
       const payload = JSON.stringify({ test: 'data' });
+      const requestId = 'req-123';
       const oldTimestamp = Date.now() - 6 * 60 * 1000; // 6 minutes ago
       const nonce = 'test-nonce';
 
-      const signature = security.signPayload(payload, oldTimestamp, nonce);
-      const isValid = security.verifySignature(payload, signature, oldTimestamp, nonce);
+      const signature = security.signPayload(payload, requestId, oldTimestamp, nonce);
+      const isValid = security.verifySignature(payload, requestId, signature, oldTimestamp, nonce);
 
       expect(isValid).toBe(false);
     });
 
     it('should accept recent timestamps', () => {
       const payload = JSON.stringify({ test: 'data' });
+      const requestId = 'req-123';
       const recentTimestamp = Date.now() - 2 * 60 * 1000; // 2 minutes ago
       const nonce = 'test-nonce';
 
-      const signature = security.signPayload(payload, recentTimestamp, nonce);
-      const isValid = security.verifySignature(payload, signature, recentTimestamp, nonce);
+      const signature = security.signPayload(payload, requestId, recentTimestamp, nonce);
+      const isValid = security.verifySignature(
+        payload,
+        signature,
+        requestId,
+        recentTimestamp,
+        nonce,
+      );
 
       expect(isValid).toBe(true);
     });
@@ -156,7 +179,8 @@ describe('WebhookSecurity', () => {
   describe('header generation', () => {
     it('should generate required headers', () => {
       const payload = JSON.stringify({ test: 'data' });
-      const headers = security.generateHeaders(payload);
+      const requestId = 'req-123';
+      const headers = security.generateHeaders(payload, requestId);
 
       expect(headers).toHaveProperty('x-agentguard-signature');
       expect(headers).toHaveProperty('x-agentguard-timestamp');
@@ -167,11 +191,13 @@ describe('WebhookSecurity', () => {
 
     it('should generate valid signature in headers', () => {
       const payload = JSON.stringify({ test: 'data' });
-      const headers = security.generateHeaders(payload);
+      const requestId = 'req-123';
+      const headers = security.generateHeaders(payload, requestId);
 
       const isValid = security.verifySignature(
         payload,
         headers['x-agentguard-signature'],
+        requestId,
         parseInt(headers['x-agentguard-timestamp'], 10),
         headers['x-agentguard-nonce'],
       );
@@ -183,16 +209,18 @@ describe('WebhookSecurity', () => {
   describe('response validation', () => {
     it('should validate valid response', () => {
       const body = JSON.stringify({ status: 'ok' });
-      const headers = security.generateHeaders(body);
+      const requestId = 'req-123';
+      const headers = security.generateHeaders(body, requestId);
 
-      const result = security.validateResponse(body, headers);
+      const result = security.validateResponse(body, headers, requestId);
       expect(result.valid).toBe(true);
       expect(result.reason).toBeUndefined();
     });
 
     it('should reject response with missing headers', () => {
       const body = JSON.stringify({ status: 'ok' });
-      const result = security.validateResponse(body, {});
+      const requestId = 'req-123';
+      const result = security.validateResponse(body, {}, requestId);
 
       expect(result.valid).toBe(false);
       expect(result.reason).toBe('Missing required security headers');
@@ -200,28 +228,41 @@ describe('WebhookSecurity', () => {
 
     it('should reject response with invalid signature', () => {
       const body = JSON.stringify({ status: 'ok' });
+      const requestId = 'req-123';
       const headers = {
         'x-agentguard-signature': 'invalid',
         'x-agentguard-timestamp': Date.now().toString(),
         'x-agentguard-nonce': 'test-nonce',
+        'x-agentguard-request-id': requestId,
       };
 
-      const result = security.validateResponse(body, headers);
+      const result = security.validateResponse(body, headers, requestId);
       expect(result.valid).toBe(false);
       expect(result.reason).toBe('Invalid signature');
     });
 
     it('should reject response with invalid timestamp format', () => {
       const body = JSON.stringify({ status: 'ok' });
+      const requestId = 'req-123';
       const headers = {
         'x-agentguard-signature': 'some-signature',
         'x-agentguard-timestamp': 'not-a-number',
         'x-agentguard-nonce': 'test-nonce',
+        'x-agentguard-request-id': requestId,
       };
 
-      const result = security.validateResponse(body, headers);
+      const result = security.validateResponse(body, headers, requestId);
       expect(result.valid).toBe(false);
       expect(result.reason).toBe('Invalid timestamp format');
+    });
+
+    it('should reject response with mismatched request ID', () => {
+      const body = JSON.stringify({ status: 'ok' });
+      const headers = security.generateHeaders(body, 'req-123');
+
+      const result = security.validateResponse(body, headers, 'req-456');
+      expect(result.valid).toBe(false);
+      expect(result.reason).toBe('Request ID mismatch');
     });
   });
 
@@ -229,17 +270,22 @@ describe('WebhookSecurity', () => {
     it('should use constant-time comparison', () => {
       // This is hard to test directly, but we can at least verify it works correctly
       const payload = 'test';
+      const requestId = 'req-123';
       const timestamp = Date.now();
       const nonce = 'nonce';
-      const signature = security.signPayload(payload, timestamp, nonce);
+      const signature = security.signPayload(payload, requestId, timestamp, nonce);
 
       // Test with strings of different lengths (should still be secure)
-      expect(security.verifySignature(payload, 'short', timestamp, nonce)).toBe(false);
-      expect(security.verifySignature(payload, signature + 'extra', timestamp, nonce)).toBe(false);
+      expect(security.verifySignature(payload, 'short', requestId, timestamp, nonce)).toBe(false);
+      expect(
+        security.verifySignature(payload, signature + 'extra', requestId, timestamp, nonce),
+      ).toBe(false);
 
       // Test with similar signatures
       const wrongSignature = signature.slice(0, -1) + 'X';
-      expect(security.verifySignature(payload, wrongSignature, timestamp, nonce)).toBe(false);
+      expect(security.verifySignature(payload, wrongSignature, requestId, timestamp, nonce)).toBe(
+        false,
+      );
     });
   });
 });

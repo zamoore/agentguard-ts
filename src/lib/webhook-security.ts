@@ -7,6 +7,7 @@ export class WebhookSecurity {
   private readonly signatureHeader = 'x-agentguard-signature';
   private readonly timestampHeader = 'x-agentguard-timestamp';
   private readonly nonceHeader = 'x-agentguard-nonce';
+  private readonly requestIdHeader = 'x-agentguard-request-id';
 
   constructor(private readonly config: WebhookSecurityConfig) {
     if (!config.signingSecret || config.signingSecret.length < 32) {
@@ -17,22 +18,28 @@ export class WebhookSecurity {
   /**
    * Sign a webhook payload
    */
-  signPayload(payload: string, timestamp: number, nonce: string): string {
-    const message = `${timestamp}.${nonce}.${payload}`;
+  signPayload(payload: string, requestId: string, timestamp: number, nonce: string): string {
+    const message = `${requestId}.${timestamp}.${nonce}.${payload}`;
     return createHmac('sha256', this.config.signingSecret).update(message).digest('hex');
   }
 
   /**
    * Verify a webhook signature
    */
-  verifySignature(payload: string, signature: string, timestamp: number, nonce: string): boolean {
+  verifySignature(
+    payload: string,
+    signature: string,
+    requestId: string,
+    timestamp: number,
+    nonce: string,
+  ): boolean {
     // Check timestamp to prevent replay attacks (5 minute window)
     const now = Date.now();
     if (Math.abs(now - timestamp) > 5 * 60 * 1000) {
       return false;
     }
 
-    const expectedSignature = this.signPayload(payload, timestamp, nonce);
+    const expectedSignature = this.signPayload(payload, requestId, timestamp, nonce);
 
     // Constant-time comparison to prevent timing attacks
     return this.secureCompare(signature, expectedSignature);
@@ -90,15 +97,16 @@ export class WebhookSecurity {
   /**
    * Generate secure headers for a webhook request
    */
-  generateHeaders(payload: string): Record<string, string> {
+  generateHeaders(payload: string, requestId: string): Record<string, string> {
     const timestamp = Date.now();
     const nonce = randomBytes(16).toString('hex');
-    const signature = this.signPayload(payload, timestamp, nonce);
+    const signature = this.signPayload(payload, requestId, timestamp, nonce);
 
     return {
       [this.signatureHeader]: signature,
       [this.timestampHeader]: timestamp.toString(),
       [this.nonceHeader]: nonce,
+      [this.requestIdHeader]: requestId,
       'Content-Type': 'application/json',
       'User-Agent': 'AgentGuard/1.0',
     };
@@ -110,15 +118,24 @@ export class WebhookSecurity {
   validateResponse(
     body: string,
     headers: Record<string, string>,
+    expectedRequestId: string,
   ): { valid: boolean; reason?: string } {
     const signature = headers[this.signatureHeader];
     const timestamp = headers[this.timestampHeader];
     const nonce = headers[this.nonceHeader];
+    const requestId = headers[this.requestIdHeader];
 
-    if (!signature || !timestamp || !nonce) {
+    if (!signature || !timestamp || !nonce || !requestId) {
       return {
         valid: false,
         reason: 'Missing required security headers',
+      };
+    }
+
+    if (requestId !== expectedRequestId) {
+      return {
+        valid: false,
+        reason: 'Request ID mismatch',
       };
     }
 
@@ -130,7 +147,7 @@ export class WebhookSecurity {
       };
     }
 
-    const isValid = this.verifySignature(body, signature, timestampNum, nonce);
+    const isValid = this.verifySignature(body, signature, requestId, timestampNum, nonce);
 
     return {
       valid: isValid,

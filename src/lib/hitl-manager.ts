@@ -171,6 +171,18 @@ export class HITLManager {
     response: ApprovalResponse,
     headers?: Record<string, string>,
   ): Promise<void> {
+    const pending = this.pendingApprovals.get(response.requestId);
+
+    if (!pending) {
+      this.logger.warn(`Received approval response for unknown request: ${response.requestId}`, {
+        response,
+      });
+      throw new AgentGuardError(
+        `Unknown approval request ID: ${response.requestId}`,
+        'UNKNOWN_REQUEST_ID',
+      );
+    }
+
     // Validate the response if security is enabled
     if (this.webhookSecurity) {
       if (!headers) {
@@ -181,7 +193,11 @@ export class HITLManager {
       }
 
       const responseBody = JSON.stringify(response);
-      const validation = this.webhookSecurity.validateResponse(responseBody, headers);
+      const validation = this.webhookSecurity.validateResponse(
+        responseBody,
+        headers,
+        response.requestId,
+      );
 
       if (!validation.valid) {
         throw new AgentGuardError(
@@ -201,18 +217,6 @@ export class HITLManager {
         }
         this.processedNonces.set(nonce, Date.now());
       }
-    }
-
-    const pending = this.pendingApprovals.get(response.requestId);
-
-    if (!pending) {
-      this.logger.warn(`Received approval response for unknown request: ${response.requestId}`, {
-        response,
-      });
-      throw new AgentGuardError(
-        `Unknown approval request ID: ${response.requestId}`,
-        'UNKNOWN_REQUEST_ID',
-      );
     }
 
     this.logger.info(`Received approval response: ${response.requestId}`, { response });
@@ -266,7 +270,7 @@ export class HITLManager {
 
     // Generate security headers
     const securityHeaders = this.webhookSecurity
-      ? this.webhookSecurity.generateHeaders(payloadString)
+      ? this.webhookSecurity.generateHeaders(payloadString, request.id)
       : {};
 
     // Default headers for webhook requests
